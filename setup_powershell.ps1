@@ -1,131 +1,193 @@
 $USERNAME=(echo $env:username)
 
-$MINIKUBE_DIR=$HOME"/.minikube"
-$CERT_DIRECTORY="$MINIKUBE_DIR/redhat-certs"
-$SCRIPTPATH="$( cd -- "$(dirname "$0")" >$null 2>&1 ; pwd -P )"
-$MINIKUBE_CONTEXT=${USERNAME}-context
-$NAMESPACE_DEV=${USERNAME}-dev
-$NAMESPACE_STAGE=${USERNAME}-stage
+$MINIKUBE_DIR=($HOME) + "\.minikube"
+$CERT_DIRECTORY="$MINIKUBE_DIR\redhat-certs"
+$SCRIPTPATH=(Split-Path -parent $MyInvocation.MyCommand.Path)
+$MINIKUBE_CONTEXT=${USERNAME}+"-context"
+$NAMESPACE_DEV=${USERNAME}+"-dev"
+$NAMESPACE_STAGE=${USERNAME}+"-stage" 
 
-Create_certificates() {
+function create_certificates {
     echo "Creating certificates ..."
-    if [ ! -d $CERT_DIRECTORY ]; then
-        mkdir $CERT_DIRECTORY
-    fi
+    if (! (test-path -Path $CERT_DIRECTORY)) {
+        mkdir $CERT_DIRECTORY}
+   
+    Set-Location "$CERT_DIRECTORY"
+    openssl genrsa -out $CERT_DIRECTORY\$USERNAME.key 2048  > $null 2>&1
+    openssl req -new -key $CERT_DIRECTORY\$USERNAME.key -out $CERT_DIRECTORY\$USERNAME.csr -subj "/CN=$USERNAME/O=group1"  > $null 2>&1
+    openssl x509 -req -in $CERT_DIRECTORY\$USERNAME.csr -CA $MINIKUBE_DIR\ca.crt -CAkey $MINIKUBE_DIR\ca.key -CAcreateserial -out $CERT_DIRECTORY\$USERNAME.crt -days 500  > $null 2>&1
 
-    cd "$CERT_DIRECTORY" || exit
-    openssl genrsa -out $USERNAME.key 2048  > $null 2>&1
-    openssl req -new -key $USERNAME.key -out $USERNAME.csr -subj "/CN=$USERNAME/O=group1"  > $null 2>&1
-    openssl x509 -req -in $USERNAME.csr -CA $MINIKUBE_DIR/ca.crt -CAkey $MINIKUBE_DIR/ca.key -CAcreateserial -out $USERNAME.crt -days 500  > $null 2>&1
-
-    cp $USERNAME.key $MINIKUBE_DIR/$USERNAME.key
-    cp $USERNAME.crt $MINIKUBE_DIR/$USERNAME.crt
+    cp $CERT_DIRECTORY\$USERNAME.key $MINIKUBE_DIR\$USERNAME.key
+    cp $CERT_DIRECTORY\$USERNAME.crt $MINIKUBE_DIR\$USERNAME.crt
+    Set-Location $HOME
 }
 
-delete_certificates() {
+function delete_certificates {
     echo "Deleting certificates ..."
-    if ! rm ${MINIKUBE_DIR}/$USERNAME.key ; then
-        echo "Error deleting key file ${MINIKUBE_DIR}/$USERNAME.key"
+    $keyPath=(Test-Path -Path ${MINIKUBE_DIR}\$USERNAME.key)
+    $crtPath=(Test-Path -Path ${MINIKUBE_DIR}\$USERNAME.crt)
+    
+    if ($keyPath -eq $True)
+    {
+        rm ${MINIKUBE_DIR}\$USERNAME.key
+        if ($? -eq $False) 
+        {
+        echo "Error deleting key file ${MINIKUBE_DIR}\$USERNAME.key"
         exit
-    fi
-
-    if ! rm ${MINIKUBE_DIR}/$USERNAME.crt; then
-        echo "Error deleting certificate file ${MINIKUBE_DIR}/$USERNAME.crt"
+        } 
+    }
+    if ($crtPath -eq $True)
+    {
+        rm ${MINIKUBE_DIR}\$USERNAME.crt
+        if ($? -eq $False) 
+        {
+        echo "Error deleting key file ${MINIKUBE_DIR}\$USERNAME.crt"
         exit
-    fi
+        }
+    } 
+    elseif ($keyPath -eq $False)
+    {
+    echo "${MINIKUBE_DIR}\$USERNAME.key not found."
+    }
+    elseif ($crtPath -eq $False) 
+    {
+    echo "${MINIKUBE_DIR}\$USERNAME.crt not found."
+    }
 }
 
-create_namespace() {
-    echo "Creating namespace '${1}' ..."
-    if ! kubectl get namespace ${1}  > $null 2>&1 ; then
-        if ! kubectl create namespace ${1}  > $null 2>&1 ; then
-            echo "Error while creating namespace ${1}"
-            exit
-        fi
-    fi
+function create_namespace(${1}){
+    kubectl get namespace ${1} > $null 2>&1
+    if ($? -eq $False) 
+    {
+        echo "Creating namespace '${1}' ..."
+        kubectl create namespace ${1} > $null
+       
+        if ($? -eq $False)
+        {
+        echo "Error while creating namespace ${1}."
+        exit
+        } else {
+        echo "Namespace ${1} created."
+        }
+    }
+    elseif ($? -eq $True) 
+    {
+    echo "Namespace ${1} already exists" 
+    } else {  
+    echo "Error while creating namespace ${1}"
+    exit
+    }    
 }
 
-delete_namespace() {
-    echo "Deleting namespace '${1}' ..."
-    if kubectl get namespace ${1}  > $null 2>&1 ; then
-        if ! kubectl delete namespace ${1}  > $null 2>&1 ; then
-            echo "Error while deleting namespace ${1}"
-            exit
-        fi
-    fi
+function delete_namespace(${1}) {
+    kubectl get namespace ${1} > $null 2>&1
+    if ($? -eq $True)
+    { 
+        echo "Deleting namespace '${1}' ..."
+        kubectl delete namespace ${1} > $null 2>&1
+        if ($? -eq $False)
+        {
+        echo "Error while deleting namespace ${1}"
+        exit
+        } 
+    }
+    elseif ($? -eq $False)
+    {
+    echo "Namespace ${1} not found"
+    exit
+    }
 }
 
-configure_kubectl_credentials() {
+function configure_kubectl_credentials {
     echo "Creating Kubectl credentials for '${USERNAME}' ..."
-    if ! kubectl config set-credentials $USERNAME --client-certificate=$USERNAME.crt --client-key=$USERNAME.key  > $null 2>&1 ; then
+    kubectl config set-credentials $USERNAME --client-certificate=$CERT_DIRECTORY\$USERNAME.crt --client-key=$CERT_DIRECTORY\$USERNAME.key  > $null 2>&1
+    if ($? -eq $False) {
         echo "Error while creating config credentials"
         exit
-    fi
+    } else { echo "Credentials created"
+    } 
 }
 
-create_kubectl_context() {
+function create_kubectl_context {
     echo "Creating Kubectl context '$MINIKUBE_CONTEXT' for user '${USERNAME}' ..."
-    if ! kubectl config set-context $MINIKUBE_CONTEXT --cluster=minikube --user=$USERNAME --namespace=${1}  > $null 2>&1; then
+    kubectl config set-context $MINIKUBE_CONTEXT --cluster=minikube --user=$USERNAME --namespace=${1}  > $null 2>&1
+    if ($? -eq $False) {
         echo "Error while creating config context"
         exit
-    fi
+    } 
 }
 
-delete_kubectl_context() {
+function delete_kubectl_context {
     echo "Deleting Kubectl context '${MINIKUBE_CONTEXT}' ..."
-    if ! kubectl config delete-context $MINIKUBE_CONTEXT  > $null 2>&1; then
+    kubectl config delete-context $MINIKUBE_CONTEXT  > $null 2>&1
+    if ($? -eq $False) { 
         echo "Error while deleting config context"
         exit
-    fi
+    } else { 
+    echo "Context ${MINIKUBE_CONTEXT} deleted."
+    }
 }
 
-apply_role_resources() {
+function apply_role_resources(${1}) {
+    $OLDYML= Get-Content -Path $SCRIPTPATH\files\role-binding.yml -Raw
+    $NEWYML= $OLDYML -replace '{username}',${USERNAME} -replace '{namespace}', ${1}     
+    
+    if (($NEWYML | Set-Content -Path $SCRIPTPATH\files\role-binding.yml > $null 2>&1) -eq $False) {
+        echo "Could not apply security resources."
+        exit
+    } else {
     echo "Creating role resources for user '${USERNAME}' in namespace '${1}' ..."
-    if ! (Get-Content -Path $SCRIPTPATH/files/role-binding.yml -replace `\$username`, ${USERNAME} -replace `\$namespace`, ${1}) | kubectl apply -f -  > $null 2>&1 ; then
-        echo "Could not apply security resources"
-        exit
-    fi
+    $NEWYML | Set-Content -Path $SCRIPTPATH\files\role-binding.yml
+    $OLDYML | kubectl apply -f - --validate=false
+    }
 }
 
-use_kubectl_context() {
-     if ! kubectl config use-context ${1} ; then
+function use_kubectl_context(${1}) {
+    kubectl config use-context ${1} > $null 2>&1
+    if ($? -eq $False) {
         echo "Context ${1} is not available"
-        exit
-    fi
+        exit}
+    elseif ($? -eq $True) { 
+    echo "Context ${1} has been set."
+     }
 }
 
-use_kubectl_namespace() {
+function use_kubectl_namespace(${1}) {
     echo "Switching to namespace '${1}' ..."
-     if ! kubectl config set-context --current --namespace=${1}  > $null 2>&1; then
+    kubectl config set-context --current --namespace=${1}  > $null 2>&1
+    if ($? -eq $False) {
         echo "Namespace ${1} is not available"
         exit
-    fi
+    } else {
+    echo "Switched to namesapce ${1}"
+    }
 }
 
+function openssl_status {
+    return [bool](Get-Command -Name openssl -ErrorAction SilentlyContinue)
+}
 
-if ! command -v openssl  > $null 2>&1
-then
-    echo "Please install OpenSSL"
-    exit
-fi
+function kubectl_status {
+    return [bool](Get-Command -Name kubectl -ErrorAction SilentlyContinue)
+} 
 
-if ! command -v kubectl  > $null 2>&1
-then
-    echo "Please install Kubectl"
-    exit
-fi
+if ((openssl_status) -eq $False) {
+    echo "Please install OpenSSL and add the OpenSSL bin directory to the system environment variable, Path. If already installed, add the OpenSSL bin directory to Path." 
+    exit }
 
-if [ ! -d $MINIKUBE_DIR ]; then
+if ((kubectl_status) -eq $False) {
+    echo "Please install Kubectl" 
+    exit }
+
+if (! (Test-Path -Path $MINIKUBE_DIR )) {
     echo "Minikube directory not found"
-    exit
-fi
+    exit }
 
-if ! kubectl config use-context minikube  > $null 2>&1 ; then
+if ((kubectl config current-context) -ne "minikube" > $null 2>&1) {
     echo "Minikube context is not available"
-    exit
-fi
+    exit } 
 
-if [ "$1" == "--delete" ] || [ "$1" == "-d" ]; then
+if ( (${1} -eq "--delete" ) -or ( ${1} -eq "-d" )) {
 
     # Use the default context that relates to admin credentials
     use_kubectl_context "minikube"
@@ -139,9 +201,10 @@ if [ "$1" == "--delete" ] || [ "$1" == "-d" ]; then
     delete_kubectl_context
 
     delete_certificates
+    }
 
 else
-
+    {
     create_namespace "${NAMESPACE_DEV}"
     create_namespace "${NAMESPACE_STAGE}"
 
@@ -155,6 +218,6 @@ else
 
     use_kubectl_context $MINIKUBE_CONTEXT
     use_kubectl_namespace "${NAMESPACE_DEV}"
-fi
+}
 
 echo "OK!"
